@@ -1,11 +1,11 @@
 Name:           cursor
-Version:        0.50.1
+Version:        0.50.0
 Release:        1%{?dist}
 Summary:        Cursor - The AI Code Editor
 
 License:        LicenseRef-Proprietary
 URL:            https://www.cursor.com/
-Source0:        Cursor-0.50.1-x86_64.AppImage
+Source0:        Cursor-0.50.0-x86_64.AppImage
 
 BuildRequires:  desktop-file-utils
 BuildRequires:  hicolor-icon-theme
@@ -48,7 +48,6 @@ if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
 fi
 
 DESKTOP_FILE_SRC="squashfs-root/cursor.desktop"
-DESKTOP_FILE_DST_NAME="co.anysphere.cursor.desktop"
 
 sed -i 's|^Exec=.*$|Exec=cursor %F|' "${DESKTOP_FILE_SRC}"
 
@@ -71,11 +70,12 @@ sed -i '/^X-AppImage-Version=/d' "${DESKTOP_FILE_SRC}"
 sed -i '/^Actions=new-empty-window;$/d' "${DESKTOP_FILE_SRC}"
 sed -i '/^\[Desktop Action new-empty-window\]/,/^$/d' "${DESKTOP_FILE_SRC}"
 
+
 mkdir -p %{buildroot}%{_datadir}/applications/
 desktop-file-validate "${DESKTOP_FILE_SRC}"
 desktop-file-install --dir=%{buildroot}%{_datadir}/applications \
   --rebuild-mime-info-cache \
-  "${DESKTOP_FILE_SRC}" --destfilename="${DESKTOP_FILE_DST_NAME}"
+  "${DESKTOP_FILE_SRC}"
 
 mkdir -p %{buildroot}/usr/local/bin/
 ln -sf /usr/local/cursor/AppRun %{buildroot}/usr/local/bin/cursor
@@ -94,6 +94,6 @@ fi
 /lib64/libffmpeg.so
 /usr/local/cursor/*
 /usr/local/bin/cursor
-%{_datadir}/applications/co.anysphere.cursor.desktop
+%{_datadir}/applications/cursor.desktop
 %{_datadir}/icons/hicolor/256x256/apps/co.anysphere.cursor.png
 %{_datadir}/icons/hicolor/*/apps/cursor.png
