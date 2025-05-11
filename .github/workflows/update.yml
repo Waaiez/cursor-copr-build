@@ -3,6 +3,7 @@ on:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
+
 jobs:
   Update-Cursor:
     runs-on: ubuntu-latest
@@ -12,52 +13,133 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v4
 
-      - name: Check latest version and update spec
+      - name: Check latest version, update spec, build, and release
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
         run: |
-          curl -LJO https://downloader.cursor.sh/linux/appImage/x64
-          LATEST_FILE=$(ls cursor-*x86_64.AppImage)
-          echo "Latest file: $LATEST_FILE"
+          set -e # Exit immediately if a command exits with a non-zero status.
 
-          LATEST_VERSION=$(echo $LATEST_FILE | sed -E 's/cursor-([0-9.]+)x86_64\.AppImage/\1/')
-          echo "Latest version: $LATEST_VERSION"
+          echo "Fetching latest version information from Cursor API..."
+          API_URL="https://www.cursor.com/api/download?platform=linux-x64&releaseTrack=latest"
+          API_RESPONSE=$(curl -sL "$API_URL")
 
-          CURRENT_VERSION=$(grep "Version:" cursor.spec | awk '{print $2}')
-          echo "Current version: $CURRENT_VERSION"
+          if ! command -v jq &> /dev/null; then
+            echo "jq command not found. Installing jq..."
+            sudo apt-get update -y && sudo apt-get install -y jq
+          fi
 
-          if [[ "$(printf '%s\n' "$CURRENT_VERSION" "$LATEST_VERSION" | sort -V | tail -n1)" == "$LATEST_VERSION" ]]; then
-            echo "New version found: $LATEST_VERSION"
-            sed -i "s/Version:.*/Version:        $LATEST_VERSION/" cursor.spec
-            sed -i "s/^Source0:.*$/Source0:        ${LATEST_FILE}/" cursor.spec
+          LATEST_VERSION=$(echo "$API_RESPONSE" | jq -r '.version')
+          DOWNLOAD_URL=$(echo "$API_RESPONSE" | jq -r '.downloadUrl')
 
-            sudo apt-get update
-            sudo apt-get install -y rpm python3-pip
+          if [[ -z "$LATEST_VERSION" || "$LATEST_VERSION" == "null" ]]; then
+            echo "Error: Could not extract LATEST_VERSION from API response."
+            echo "API Response was: $API_RESPONSE"
+            exit 1
+          fi
+          if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+            echo "Error: Could not extract DOWNLOAD_URL from API response."
+            echo "API Response was: $API_RESPONSE"
+            exit 1
+          fi
 
-            pip3 install copr-cli
+          echo "Latest version from API: $LATEST_VERSION"
+          echo "Download URL: $DOWNLOAD_URL"
 
-            mkdir -p ~/.config
-            echo "${{ secrets.COPR_CONFIG }}" > ~/.config/copr
+          LATEST_FILE=$(basename "$DOWNLOAD_URL")
+          echo "Latest file name will be: $LATEST_FILE"
 
-            mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-            cp cursor.spec rpmbuild/SPECS/cursor.spec
-            cp "$LATEST_FILE" rpmbuild/SOURCES/
+          CURRENT_VERSION=$(grep -Po 'Version:\s*\K[0-9.]+' cursor.spec || echo "0.0.0")
+          echo "Current version in spec: $CURRENT_VERSION"
 
-            rpmbuild -bs --define "_topdir $(pwd)/rpmbuild" rpmbuild/SPECS/cursor.spec
+          NEEDS_UPDATE=false
+          if command -v dpkg &> /dev/null; then
+            if dpkg --compare-versions "$LATEST_VERSION" gt "$CURRENT_VERSION"; then
+              NEEDS_UPDATE=true
+              echo "New version $LATEST_VERSION found (current: $CURRENT_VERSION). Update required. (using dpkg)"
+            fi
+          elif [[ "$LATEST_VERSION" != "$CURRENT_VERSION" && "$(printf '%s\n%s\n' "$CURRENT_VERSION" "$LATEST_VERSION" | sort -V | tail -n1)" == "$LATEST_VERSION" ]]; then
+            NEEDS_UPDATE=true
+            echo "New version $LATEST_VERSION found (current: $CURRENT_VERSION). Update required. (using sort -V)"
+          fi
 
-            # SRPM_NAME=$(echo "${LATEST_FILE}" | sed 's/\.AppImage/\.src\.rpm/')
-            SRPM_NAME=$(ls rpmbuild/SRPMS/cursor-*.src.rpm)
-            copr-cli build --nowait cursor ${SRPM_NAME}
+          if ! $NEEDS_UPDATE; then
+            echo "Current version $CURRENT_VERSION is up to date or newer than API version $LATEST_VERSION. No update needed."
+            exit 0 # Exit successfully
+          fi
 
-            git config --global user.email "github-actions@github.com"
-            git config --global user.name "GitHub Actions"
+          echo "Downloading $LATEST_FILE from $DOWNLOAD_URL..."
+          curl -Lo "$LATEST_FILE" "$DOWNLOAD_URL"
+          if [ ! -f "$LATEST_FILE" ] || [ ! -s "$LATEST_FILE" ]; then # Check if file exists and is not empty
+              echo "Error: Failed to download $LATEST_FILE or downloaded file is empty."
+              exit 1
+          fi
+          echo "Download complete: $(ls -lh "$LATEST_FILE")"
 
-            git add cursor.spec
+          echo "Updating cursor.spec..."
+          sed -i "s/Version:.*/Version:        $LATEST_VERSION/" cursor.spec
+          sed -i "s|^Source0:.*|Source0:        ${LATEST_FILE}|" cursor.spec # Using | as sed delimiter for URLs
+          echo "cursor.spec updated."
+          echo "--- cursor.spec content after update ---"
+          cat cursor.spec
+          echo "----------------------------------------"
+
+          echo "Installing build dependencies (rpm, python3-pip)..."
+          sudo apt-get update -y
+          sudo apt-get install -y rpm python3-pip
+
+          echo "Installing copr-cli..."
+          pip3 install copr-cli
+
+          echo "Setting up Copr configuration..."
+          mkdir -p ~/.config
+          echo "${{ secrets.COPR_CONFIG }}" > ~/.config/copr
+          chmod 600 ~/.config/copr # Secure the config file
+
+          echo "Setting up RPM build environment..."
+          mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          cp cursor.spec rpmbuild/SPECS/cursor.spec
+          mv "$LATEST_FILE" rpmbuild/SOURCES/ # Move downloaded AppImage
+
+          echo "Building SRPM..."
+          rpmbuild -bs --define "_topdir $(pwd)/rpmbuild" rpmbuild/SPECS/cursor.spec
+          
+          SRPM_FILE_PATH=$(find rpmbuild/SRPMS/ -name "cursor-*.src.rpm" | head -n 1)
+          if [[ -z "$SRPM_FILE_PATH" ]]; then
+            echo "Error: SRPM file not found in rpmbuild/SRPMS/"
+            ls -R rpmbuild/SRPMS/
+            exit 1
+          fi
+          echo "SRPM file found: $SRPM_FILE_PATH"
+
+          echo "Submitting build to Copr (project: cursor)..."
+          copr-cli build --nowait cursor "$SRPM_FILE_PATH"
+
+          echo "Configuring git user..."
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "github-actions[bot]"
+
+          echo "Committing and pushing changes to cursor.spec..."
+          git add cursor.spec
+          # Check if there are changes to commit to avoid empty commits
+          if git diff --staged --quiet; then
+            echo "No changes to commit in cursor.spec (already up-to-date or no effective change)."
+          else
             git commit -m "Update Cursor to version $LATEST_VERSION"
             git push
+            echo "Changes pushed to repository."
+          fi
+          
+          echo "Logging into GitHub CLI..."
+          gh auth login --with-token < <(echo "${{ secrets.GITHUB_TOKEN }}") 
 
-            gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
+          echo "Creating GitHub Release v${LATEST_VERSION}..."
+          if gh release view "v${LATEST_VERSION}" > /dev/null 2>&1; then
+            echo "Release v${LATEST_VERSION} already exists. Skipping creation."
+          else
             gh release create "v${LATEST_VERSION}" \
               --title "Cursor ${LATEST_VERSION}" \
-              --notes "$(printf "Updated Cursor to version ${LATEST_VERSION}\n\nhttps://copr.fedorainfracloud.org/coprs/matthaigh27/cursor/")"
-          else
-            echo "Current version is up to date"
+              --notes "$(printf "Updated Cursor to version ${LATEST_VERSION}\n\nhttps://copr.fedorainfracloud.org/coprs/waaiez/cursor/")"
+            echo "GitHub Release v${LATEST_VERSION} created."
           fi
+
+          echo "Workflow completed successfully."
