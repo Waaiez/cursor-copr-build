@@ -1,11 +1,11 @@
 Name:           cursor
-Version:        0.50.2
+Version:        0.50.3
 Release:        1%{?dist}
 Summary:        Cursor - The AI Code Editor
 
 License:        LicenseRef-Proprietary
 URL:            https://www.cursor.com/
-Source0:        Cursor-0.50.2-x86_64.AppImage
+Source0:        Cursor-0.50.3-x86_64.AppImage
 
 BuildArch:      x86_64
 ExclusiveArch:  x86_64
