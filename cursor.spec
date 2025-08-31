@@ -49,6 +49,30 @@ ln -sf /usr/local/cursor/AppRun %{buildroot}/usr/local/bin/cursor
 %post
 gtk-update-icon-cache -f -t /usr/share/icons/hicolor || : # Update hicolor cache
 
+%posttrans
+# One-time deprecation notice on upgrade
+_markdir=%{_localstatedir}/lib/%{name}
+_marker=${_markdir}/.deprecated_notice_shown
+if [ "$1" -eq 2 ]; then # 2 = upgrade
+  mkdir -p "${_markdir}"
+  if [ ! -f "${_marker}" ]; then
+    cat >&2 <<'EOF'
+DEPRECATED: This COPR repackaged Cursor from AppImage. Cursor now ships the official RPM on their website.
+Migrate to the official package:
+  https://forum.cursor.com/t/linux-deb-and-rpm-downloads/132054
+Project: https://github.com/waaiez/cursor-copr-build
+Official: https://www.cursor.com/downloads
+EOF
+    : > "${_marker}"
+  fi
+fi
+
+%preun
+# On erase, clean the marker
+if [ "$1" -eq 0 ]; then
+  rm -f %{_localstatedir}/lib/%{name}/.deprecated_notice_shown || :
+fi
+
 %files
 /lib64/libffmpeg.so
 /usr/local/cursor/*
